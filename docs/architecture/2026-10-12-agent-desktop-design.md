@@ -3,7 +3,7 @@
 > 先理解一个 Agent 怎样完成任务，再逐步把它做成桌面产品。
 
 - 日期：2026-10-12。
-- 状态：已按确认的简化方向更新；本文描述目标设计，产品代码尚未实现。
+- 状态：已按确认的简化方向更新；阶段 1（CLI + Mock）已实现，其余部分描述目标设计，尚未实现。
 - 平台：Windows x64。
 - 方法：从零实现，阅读 Pi 和 PI-Desktop 作为参考，不复制其产品代码。
 - 目标：Agent 可替换、工具可注册、模型可自定义、应用可扩展；先做编程场景。
@@ -157,7 +157,9 @@ interface AgentAdapter {
 }
 
 interface AgentSession {
+  /** 本次模型与工具循环全部结束后才 resolve；失败 reject；用户取消不算失败。 */
   prompt(input: string): Promise<void>;
+  /** 等待运行真正停止，不只发出中止通知；相关命令由 Core 同时取消。 */
   abort(): Promise<void>;
   subscribe(listener: (event: AgentEvent) => void): () => void;
   dispose(): Promise<void>;
@@ -171,7 +173,7 @@ interface AgentBridge {
 
 `AgentSessionConfig` 包含工作区、模型配置、系统提示词和可供模型选择的工具定义。`AgentBridge` 提供受控工具入口和凭据读取入口，不向 Adapter 传入完整 Core。
 
-首版内置 `MockAgentAdapter` 和 `PiAgentAdapter`，两者都必须支持取消。`prompt()` 在本次运行真正结束后 resolve；失败 reject。RunManager 以这个 Promise 结算 Run，不能把 Pi 中任意一次 turn-end 都当作整个任务完成。
+首版内置 `MockAgentAdapter` 和 `PiAgentAdapter`，两者都必须支持取消。`prompt()` 在本次运行真正结束后 resolve；失败 reject；用户取消不属于失败，同样 resolve，由 RunManager 结算为 cancelled。RunManager 以这个 Promise 结算 Run，不能把 Pi 中任意一次 turn-end 都当作整个任务完成。
 
 Pi 的工具 `execute` 是代理函数：必须 await `bridge.invokeTool()`。工具事件仅用于展示，不在事件监听器里再次执行工具。Pi SDK 的 import 和类型转换只放在 `agents/pi`。
 
@@ -278,7 +280,7 @@ sequenceDiagram
   M-->>A: 最终回复
   A-->>C: prompt Promise 结束
   C->>C: 保存历史和 Run 结果
-  C-->>R: run.completed / failed / cancelled
+  C-->>R: run.finished（终态：completed / failed / cancelled）
 ```
 
 图中的 A 到 R、R 到 C/T 都通过 Core 和 Preload/IPC；为了可读性省略中间转发线。UI 完全不调用工具 Handler。
@@ -328,6 +330,8 @@ stateDiagram-v2
 
 `idle` 是 Session 没有活动 Run 的状态，不是 Run 状态。完成只代表 Agent 本次执行结束，任务是否达到目标仍要依据 Diff、命令退出码和验证证据判断。
 
+`interrupted` 的两个异常退出箭头表示恢复视角：应用崩溃时进程无法自己写入状态，实际是下次启动时把遗留的 running、waiting_approval、cancelling 标记为 interrupted（见 9.1）。
+
 ### 7.3 工具审批流程
 
 ```mermaid
@@ -372,6 +376,8 @@ Main 校验 IPC 来源、输入结构和对象是否存在；Renderer 禁用 Nod
 ### 8.2 少量事件足够驱动首版界面
 
 事件包含 sessionId、runId、事件类型和 payload。文本带 messageId，工具带 toolCallId。使用 `run.started`、`message.delta`、`message.completed`、`tool.started`、`tool.completed`、`approval.requested`、`run.finished` 即可开始。
+
+`run.finished` 是 Run 的唯一终态事件，payload 携带 completed / failed / cancelled；UI 收到后关闭未决的审批卡片。被审批拒绝的工具调用同样以 `tool.completed` 结束，在结果中标记被拒绝。
 
 Core 先更新内存状态，再通知 UI；最终消息用 `message.completed` 的完整值替换临时内容。Renderer 卸载时必须解除订阅，避免一个事件处理多次。
 
@@ -458,11 +464,11 @@ src/
 
 ```mermaid
 flowchart LR
-  A[模块化单项目\nCore 与 Pi 在 Main] --> B[独立 Agent Worker\n解决阻塞与故障隔离]
-  B --> C[独立 App Host\n支持多个前端或远程连接]
-  A --> D[JSON 换 SQLite\n历史量大、查询复杂时]
-  D --> E[原生 checkpoint\n需要准确续接会话时]
-  B --> F[原生执行层与沙箱\n需要更强系统边界时]
+  A["模块化单项目<br/>Core 与 Pi 在 Main"] --> B[独立 Agent Worker<br/>解决阻塞与故障隔离]
+  B --> C[独立 App Host<br/>支持多个前端或远程连接]
+  A --> D[JSON 换 SQLite<br/>历史量大、查询复杂时]
+  D --> E[原生 checkpoint<br/>需要准确续接会话时]
+  B --> F[原生执行层与沙箱<br/>需要更强系统边界时]
 ```
 
 不是每个项目都必须走完所有节点。依据问题选择演进：主进程阻塞再拆 Worker；大量历史再换数据库；第三方扩展再设计 Plugin Host；复杂任务再加入多 Agent 调度。

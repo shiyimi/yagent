@@ -55,7 +55,7 @@ flowchart TD
 
 ```typescript
 interface AgentSession {
-  /** 本次模型与工具循环全部结束后才 resolve；失败 reject。 */
+  /** 本次模型与工具循环全部结束后才 resolve；失败 reject；用户取消不算失败。 */
   prompt(input: string): Promise<void>;
 
   /** 等待运行停止，不只发出中止通知；相关命令由 Core 同时取消。 */

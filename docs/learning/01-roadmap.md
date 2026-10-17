@@ -47,9 +47,25 @@ sequenceDiagram
 
 ## 3. 阶段 2：接入 Pi 和真实模型
 
-**要理解：** Agent 与模型、Provider 与 Endpoint、文本流与最终消息、工具代理。
+阶段 2 分两步走：先纯文本对话，再叠加只读工具。每步独立验收，都能用 CLI 观察。
+
+**要理解：** Agent 与模型、Provider 与 Endpoint、文本流与最终消息、工具代理，以及对话上下文由什么组成。
+
+**步骤 2a：纯文本对话**
 
 **要交付：** PiAgentAdapter，ModelProfile，一个 OpenAI Chat-compatible 配置，异步流式输出与取消。仍使用 CLI。
+
+**验收：** 不修改 Core/工具即可选 Pi 或 Mock；错误认证显示清晰错误；纯文本结束后只有一个终态；取消后不再继续发起模型请求。
+
+**2a 结束能回答：** 一次对话的上下文由哪些消息组成？为什么 Adapter 要转换事件？
+
+**步骤 2b：对话 + 只读工具**
+
+**要交付：** 工具代理：Pi 的工具 execute 转为 `bridge.invokeTool()`，接入阶段 1 的 `coding.read_file`；工具结果回填 Agent 上下文继续对话。
+
+**验收：** 越出工作区的读取被拒绝且 Agent 收到结构化失败结果；取消传播到工具调用；同一问题在 Pi 与 Mock 下走相同 Core/审批路径。
+
+**2b 结束能回答：** 工具结果在上下文里长什么样？一次 Run 为什么可能有多次模型请求？
 
 ```mermaid
 flowchart LR
@@ -61,17 +77,15 @@ flowchart LR
   Pi --> Tools[原有 ToolService]
 ```
 
-先完成纯聊天，再用阶段 1 的只读工具。核对所固定 Pi 版本的真实类型与事件；不要根据其他项目补丁猜 API。
-
-**验收：** 不修改 Core/工具即可选 Pi 或 Mock；错误认证显示清晰错误；纯文本结束后只有一个终态；取消后不再继续发起模型请求。
-
-**阶段结束时能回答：** 为什么 Adapter 要转换事件？一次 Run 为什么可能有多次模型请求？
+核对所固定 Pi 版本的真实类型与事件；不要根据其他项目补丁猜 API。
 
 ## 4. 阶段 3：把输入输出换成桌面界面
 
 **要理解：** Main、Renderer、Preload、IPC；函数返回与事件通知的区别。
 
 **要交付：** React Chat，有限 DesktopApi，工具卡片，审批卡片，取消按钮。仍用 Mock 先调 UI，再接 Pi。
+
+本阶段桌面端还没有设置界面，模型配置先用手工编辑的 `settings.json`（不含明文密钥）；设置界面与加密凭据在阶段 5 交付。
 
 ```mermaid
 flowchart LR
@@ -93,6 +107,8 @@ flowchart LR
 **工具顺序：** read_file → list_directory → search_code → git_status/git_diff → write_file/apply_patch → run_command。
 
 工具由 CodingApplication 注册。先用自建临时项目，不拿重要代码库验证写入和命令。
+
+本阶段还没有 Repository（阶段 5 交付），架构 9.1 的“副作用前保存快照”规则自阶段 5 起生效；本阶段依靠审批、取消和写入冲突检查控制写入与命令风险。
 
 ```mermaid
 flowchart TD
